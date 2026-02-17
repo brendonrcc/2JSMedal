@@ -1,4 +1,4 @@
-  // Global State
+ // Global State
     let currentUser = null;
     let globalGratificationSet = new Set();
     let membersCache = {};
@@ -12,7 +12,7 @@
     let leadershipLeaves = [];
     let leadershipReturns = [];
     
-    // DOM Elements
+    // DOM Elements (Initialized in DOMContentLoaded)
     let els = {}; 
 
     // Configs
@@ -46,85 +46,6 @@
          'ER': 'Entrada Recente'
     };
 
-    // --- Initialization ---
-    window.addEventListener('DOMContentLoaded', () => {
-        // Initialize Elements Object
-        els = {
-            navBtns: document.querySelectorAll('.rank-pill'), 
-            filtersPanel: document.getElementById('filters-panel'),
-            yearSelect: document.getElementById('select-year'),
-            monthSelect: document.getElementById('select-month'),
-            titleSelect: document.getElementById('select-title'),
-            tableHead: document.getElementById('table-head'),
-            tableBody: document.getElementById('table-body'),
-            emptyMsg: document.getElementById('empty-message'),
-            toolbar: document.getElementById('table-toolbar'),
-            btnPost: document.getElementById('btn-post'),
-            textPost: document.getElementById('text-post')
-        };
-
-        // Initialize Turbo Mode
-        const isTurbo = localStorage.getItem('om_turbo_mode') === 'true';
-        if(isTurbo) {
-            document.body.classList.add('turbo-mode');
-            if(document.getElementById('turbo-btn')) {
-                const btn = document.getElementById('turbo-btn');
-                btn.classList.add('active');
-                btn.querySelector('i').className = 'fas fa-bolt';
-            }
-        }
-
-        // Attach Filter Listeners
-        if(els.yearSelect) {
-            els.yearSelect.addEventListener('change', () => {
-                const selectedYear = els.yearSelect.value;
-                if (!selectedYear) return;
-                const filteredMonths = [...new Set(masterData.filter(d => d.year === selectedYear).map(d => d.month))];
-                els.monthSelect.innerHTML = '<option value="">Selecione...</option>';
-                filteredMonths.forEach(m => els.monthSelect.innerHTML += `<option value="${m}">${m}</option>`);
-                els.monthSelect.disabled = false;
-                els.titleSelect.innerHTML = '<option value="">Selecione...</option>'; els.titleSelect.disabled = true;
-            });
-        }
-
-        if(els.monthSelect) {
-            els.monthSelect.addEventListener('change', () => {
-                const year = els.yearSelect.value;
-                const month = els.monthSelect.value;
-                const filteredTitles = masterData.filter(d => d.year === year && d.month === month);
-                els.titleSelect.innerHTML = '<option value="">Selecione...</option>';
-                filteredTitles.forEach(t => els.titleSelect.innerHTML += `<option value="${t.link}">${t.title}</option>`);
-                els.titleSelect.disabled = false;
-            });
-        }
-
-        if(els.titleSelect) {
-            els.titleSelect.addEventListener('change', async () => {
-                if(els.titleSelect.value) {
-                    currentSheetTitle = els.titleSelect.options[els.titleSelect.selectedIndex].text;
-                    await fetchAndRenderTarget(els.titleSelect.value);
-                }
-            });
-        }
-
-        // Leadership Year/Month init
-        const ySelect = document.getElementById('lid-year');
-        if(ySelect) {
-             const currentY = new Date().getFullYear();
-             for(let y = currentY; y >= 2023; y--) {
-                 ySelect.innerHTML += `<option value="${y}">${y}</option>`;
-             }
-        }
-        const mSelect = document.getElementById('lid-month');
-        if(mSelect) {
-             mSelect.value = String(new Date().getMonth() + 1).padStart(2, '0');
-        }
-
-        // Start Application
-        attemptAutoLogin();
-        selectRank('Professor');
-    });
-
     // --- Core Functions ---
     
     function cleanCell(c) { return c ? c.replace(/^"|"$/g, '').trim() : ""; }
@@ -151,17 +72,12 @@
         const roleDisplay = document.getElementById('user-display-role');
         const avatarImg = document.getElementById('user-avatar-img');
         const screen = document.getElementById('login-screen');
-        
-        const loadingEl = document.getElementById('login-loading');
-        const errorEl = document.getElementById('login-error');
         const errorMsg = document.getElementById('login-error-msg');
 
         const username = await pegarUsername();
 
         if (!username || username === 'Anônimo') {
-            if(loadingEl) loadingEl.classList.add('hidden');
-            if(errorEl) errorEl.classList.remove('hidden');
-            if(errorMsg) errorMsg.textContent = "Você não está logado no fórum.";
+            denyAccess("Você não está logado no fórum.");
             return;
         }
 
@@ -173,15 +89,12 @@
             if (user) {
                 currentUser = user;
                 
-                if(userDisplay) {
-                    userDisplay.classList.remove('animate-pulse');
-                    userDisplay.textContent = user.nick;
-                }
-                if(roleDisplay) roleDisplay.textContent = user.role;
-                if(avatarImg) avatarImg.src = `https://www.habbo.com.br/habbo-imaging/avatarimage?user=${user.nick}&direction=2&head_direction=3&gesture=sml&size=m&headonly=1`;
+                userDisplay.classList.remove('animate-pulse');
+                userDisplay.textContent = user.nick;
+                roleDisplay.textContent = user.role;
+                avatarImg.src = `https://www.habbo.com.br/habbo-imaging/avatarimage?user=${user.nick}&direction=2&head_direction=3&gesture=sml&size=m&headonly=1`;
 
-                const sidebar = document.getElementById('sidebar-nav');
-                if(sidebar) sidebar.classList.remove('hidden');
+                document.getElementById('sidebar-nav').classList.remove('hidden');
 
                 const responsibleInputs = ['gen-responsible', 'min-responsible', 'lid-responsible'];
                 responsibleInputs.forEach(id => {
@@ -192,22 +105,24 @@
                 showToast(`Bem-vindo, ${user.nick}!`, 'success');
                 openGratModal();
                 
-                if(screen) {
-                    screen.classList.add('hidden-login');
-                    setTimeout(() => { screen.style.display = 'none'; }, 500);
-                }
-                
             } else {
-                if(loadingEl) loadingEl.classList.add('hidden');
-                if(errorEl) errorEl.classList.remove('hidden');
-                if(errorMsg) errorMsg.innerHTML = `O usuário <b class="text-white">${username}</b> não possui permissão.<br>Entre em contato com a liderança.`;
+                denyAccess(`O usuário <b class="text-white">${username}</b> não possui permissão.<br>Entre em contato com a liderança.`);
             }
 
         } catch (error) {
             console.error(error);
-            if(loadingEl) loadingEl.classList.add('hidden');
-            if(errorEl) errorEl.classList.remove('hidden');
-            if(errorMsg) errorMsg.textContent = "Erro de conexão ao verificar permissões. Tente recarregar.";
+            denyAccess("Erro de conexão ao verificar permissões. Tente recarregar.");
+        }
+
+        function denyAccess(msg) {
+            userDisplay.textContent = "SEM ACESSO";
+            userDisplay.classList.remove('animate-pulse');
+            userDisplay.classList.add('text-red-500');
+            roleDisplay.textContent = "Bloqueado";
+            
+            errorMsg.innerHTML = msg;
+            screen.style.display = 'flex';
+            screen.classList.remove('hidden-login');
         }
     }
 
@@ -257,8 +172,7 @@
     }
  
     function openGratModal() {
-         const modal = document.getElementById('startup-grat-modal');
-         if(modal) modal.classList.add('open');
+         document.getElementById('startup-grat-modal').classList.add('open');
     }
  
     function saveGlobalGratifications() {
@@ -290,7 +204,6 @@
     function toggleTurbo() {
          const body = document.body;
          const btn = document.getElementById('turbo-btn');
-         if(!btn) return;
          const icon = btn.querySelector('i');
          
          body.classList.toggle('turbo-mode');
@@ -1279,7 +1192,7 @@
  
          els.tableBody.innerHTML = '';
          els.emptyMsg.classList.remove('hidden');
-         if(els.toolbar) els.toolbar.classList.add('hidden');
+         els.toolbar.classList.add('hidden');
          
          els.yearSelect.innerHTML = '<option value="">Carregando...</option>'; els.yearSelect.disabled = true;
          els.monthSelect.innerHTML = '<option value="">Aguarde...</option>'; els.monthSelect.disabled = true;
@@ -1310,7 +1223,7 @@
          const config = RANK_CONFIG[currentRankKey];
          renderHeader(config);
          renderSkeleton(config.headerLabels.length, 8); 
-         if(els.toolbar) els.toolbar.classList.add('hidden');
+         els.toolbar.classList.add('hidden');
          currentRenderData = [];
          
          try {
@@ -1481,7 +1394,7 @@
                                  </select></div><input type="text" id="justify-${index}" class="input-justification ${justificationStyle}" value="${justifyValue}" placeholder="Justifique..." oninput="updateRowJustification(${index}, this.value)">${superiorLabel}</div></td></tr>`;
          });
          els.tableBody.innerHTML = html || '<tr><td colspan="15" class="text-center p-8 text-slate-400">Nenhum dado encontrado.</td></tr>';
-         if (html && els.toolbar) els.toolbar.classList.remove('hidden');
+         if (html) els.toolbar.classList.remove('hidden');
     }
  
     window.updateRowStatus = function(index, newVal) {
@@ -1662,26 +1575,10 @@
          }
          
          return `[font=Poppins][table style="border: none!important; overflow: hidden; border-radius: 15px; width: auto; padding: 0; margin: 0 auto; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); text-align: center;" bgcolor="#79a8c3"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden; padding: 7px"][table style="line-height: 0.2em; width: 100%; border-radius: 15px; border: none!important; overflow: hidden; line-height: 0.5em; margin: 0 auto;" bgcolor="#25313a"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden; padding: 14px"][img]https://i.imgur.com/S1tKqgc.gif[/img]\n[table style="border: none!important; border-radius: 40px; overflow: hidden; width: 40%; margin: -2% auto; top: 0.8em; position: relative; z-index: 10; justify-content: center;" bgcolor="79a8c3"][tr style="border: none!important"][td style="border: none!important;"][center][color=white][b][size=16]${periodText} - ${rankUpper}ES[/size][/b][/color][/center][/td][/tr][/table]\n[table style="width: 100%; border-radius: 15px; border: none!important; overflow: hidden; position: relative; z-index: 1; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);line-height: 1.4em; margin: 0 auto;" bgcolor="f8f8ff"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden"]\n\nSaudações, [color=#79a8c3][b]{USERNAME}[/b][/color]. Verifique abaixo a meta de ${rankUpper.toLowerCase()}es do período de [color=#79a8c3][b]${titleMeta}[/b][/color]:\n[center][table style="width: 20%; border-radius: 10px;border: none!important; overflow: hidden; line-height: 1em; margin-top:1em" bgcolor="79a8c3"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden; padding: 1px"][/td][/tr][/table][/center]\n\n[table style="border: none!important; border-radius: 40px; overflow: hidden; width: 40%; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); margin: -2% auto; top: 1.2em; right: 45%; position: relative; z-index: 10; justify-content: center;" bgcolor="79a8c3"][tr style="border: none!important"][td style="border: none!important;"][right][color=white][b][size=14]DESTAQUES[/size][/b][/color][/right][/td][/tr][/table]\n[table style="width: 100%; border-radius: 15px; border: none!important; overflow: hidden; position: relative; z-index: 1;line-height: 1.4em; margin: 0 auto;" bgcolor="EEEEF7"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden"]\n\n[justify]${blockDestaques || '[center]Sem destaques nesta semana.[/center]'}[/justify][/tr][/td][/table]\n\n[table style="border: none!important; border-radius: 40px; overflow: hidden; width: 40%; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); margin: -2% auto; top: 1.2em; right: 45%; position: relative; z-index: 10; justify-content: center;" bgcolor="93c47d"][tr style="border: none!important"][td style="border: none!important;"][right][color=white][b][size=14]POSITIVOS[/size][/b][/color][/right][/td][/tr][/table]\n[table style="width: 100%; border-radius: 15px; border: none!important; overflow: hidden; position: relative; z-index: 1;line-height: 1.4em; margin: 0 auto;" bgcolor="EEEEF7"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden"]\n\n[justify]${blockPositivos || '[center]Nenhum positivo.[/center]'}[/justify]\n[/tr][/td][/table]\n\n[table style="border: none!important; border-radius: 40px; overflow: hidden; width: 40%; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); margin: -2% auto; top: 1.2em; right: 45%; position: relative; z-index: 10; justify-content: center;" bgcolor="e06666"][tr style="border: none!important"][td style="border: none!important;"][right][color=white][b][size=14]NEGATIVOS[/size][/b][/color][/right][/td][/tr][/table]\n[table style="width: 100%; border-radius: 15px; border: none!important; overflow: hidden; position: relative; z-index: 1;line-height: 1.4em; margin: 0 auto;" bgcolor="EEEEF7"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden"]\n\n[justify]${blockNegativos || '[center]Nenhum negativo.[/center]'}[/justify][/tr][/td][/table]\n\n[table style="border: none!important; border-radius: 40px; overflow: hidden; width: 40%; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); margin: -2% auto; top: 1.2em; right: 45%; position: relative; z-index: 10; justify-content: center;" bgcolor="9BAFB8"][tr style="border: none!important"][td style="border: none!important;"][right][color=white][b][size=14]CASO ESPECIAL[/size][/b][/color][/right][/td][/tr][/table]\n[table style="width: 100%; border-radius: 15px; border: none!important; overflow: hidden; position: relative; z-index: 1;line-height: 1.4em; margin: 0 auto;" bgcolor="EEEEF7"][tr style="border: none!important; overflow: hidden"][td style="border: none!important; overflow: hidden"]\n\n[justify]${blockOutros || '[center]Nenhum caso especial.[/center]'}[/justify][/tr][/td][/table]\n\n[center][font=Poppins][table style="border: none!important; overflow: hidden; border-radius: 5px; width: auto; margin: 1px;"][tr style="border: none!important; overflow: hidden"]\n${footerBlocks}\n[/tr][/table][/font][/center][/td][/tr][/table]\n\n\n[size=11][color=white]<i class="fas fa-code"></i> Desenvolvido por [b].Brendon[/b] | Todos os direitos reservados à [b]Escola de Formação de Executivos[/b].[/color][/size]\n[/td][/tr][/table][/td][/tr][/table][/font]`;
-     }
- 
-     function copyBBCode() {
-         const bbcode = generateBBCodeString();
-         if(!bbcode) return;
-         
-         navigator.clipboard.writeText(bbcode).then(() => {
-             const btn = document.getElementById('btn-copy');
-             const originalText = btn.innerHTML;
-             btn.innerHTML = '<i class="fas fa-check"></i> <span>Copiado!</span>';
-             showToast("Código copiado para a área de transferência!", "success");
-             setTimeout(() => { btn.innerHTML = originalText; }, 2000);
-         }, () => {
-             showToast("Erro ao copiar o código.", "error");
-         });
-     }
+    }
  
     async function postHighlights() {
          if(currentRankKey !== 'Professor') return;
-         
          window.open('https://www.policiarcc.com/h5-', '_blank');
     }
  
@@ -1744,7 +1641,7 @@
          btnCancel.innerText = "Cancelar";
          
          document.getElementById('post-confirm-modal').classList.add('open');
-     }
+    }
  
     async function confirmPostAction() {
          const finalCargo = document.getElementById('post-input-cargo').value;
@@ -1796,17 +1693,16 @@
  
     function submitForumPost(bbcodeMessage) {
          if (!forumTokens) {
-             // Try fetching tokens one last time before failing
              const config = RANK_CONFIG[currentRankKey];
              if(config && config.topicId) {
                  fetchTopicTokens(config.topicId).then(() => {
                      if(forumTokens) {
-                         submitForumPost(bbcodeMessage); // Retry
+                         submitForumPost(bbcodeMessage); 
                      } else {
                          throw new Error("Tokens do fórum não carregados.");
                      }
                  });
-                 return; // Async retry initiated
+                 return; 
              }
              throw new Error("Tokens do fórum não carregados.");
          }
@@ -1830,7 +1726,7 @@
          document.body.appendChild(form);
          form.submit();
          setTimeout(() => document.body.removeChild(form), 2000);
-     }
+    }
  
     let ministryData = {
          date: "",
