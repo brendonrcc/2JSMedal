@@ -1,4 +1,4 @@
- // Global State
+  // Global State
     let currentUser = null;
     let globalGratificationSet = new Set();
     let membersCache = {};
@@ -1187,6 +1187,8 @@
          });
  
          const btnDestaque = document.getElementById('btn-destaque');
+         if(rankName === 'Professor') btnDestaque.parentElement.classList.remove('hidden'); // Show button container for layout if needed, but logic hides btn-destaque usually
+         // Actually logic: btn-destaque visibility is what matters
          if(rankName === 'Professor') btnDestaque.classList.remove('hidden');
          else btnDestaque.classList.add('hidden');
  
@@ -1945,36 +1947,49 @@
          
          window.open(`${baseUrl}?${params.toString()}`, '_blank');
     }
- 
-    async function openMinistryMP() {
-         const allNegatives = [
-             ...ministryData.ministers.negative, 
-             ...ministryData.interns.negative
-         ];
-         
-         if(allNegatives.length === 0) return;
- 
-         const confirmed = await showCustomConfirm(
-             "Enviar MPs Ministeriais", 
-             `Deseja enviar MP de advertência para <b>${allNegatives.length}</b> membros (Ministros/Estagiários)?`
-         );
-         if (!confirmed) return;
- 
-         const btn = document.getElementById('btn-min-mp');
-         if(btn) btn.disabled = true;
- 
-         for(let i=0; i < allNegatives.length; i++) {
-             const nick = allNegatives[i];
-             if(btn) btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> (${i+1}/${allNegatives.length})`;
-             try {
-                 // Simulate delay
-                 await delay(500); 
-             } catch(e) { console.error(e); }
-         }
- 
-         if(btn) {
-             btn.disabled = false;
-             btn.innerHTML = `<i class="fas fa-envelope"></i> Enviar MPs`;
-         }
-         showToast("MPs enviadas (Simulado).", "success");
-    }
+
+    // Initialization
+    document.addEventListener("DOMContentLoaded", () => {
+        els = {
+            tableBody: document.getElementById('table-body'),
+            tableHead: document.getElementById('table-head'),
+            emptyMsg: document.getElementById('empty-message'),
+            toolbar: document.getElementById('table-toolbar'),
+            yearSelect: document.getElementById('select-year'),
+            monthSelect: document.getElementById('select-month'),
+            titleSelect: document.getElementById('select-title')
+        };
+        
+        // Setup Filter Listeners
+        if(els.yearSelect) {
+            els.yearSelect.addEventListener('change', function() {
+                const y = this.value;
+                const months = [...new Set(masterData.filter(d => d.year == y).map(d => d.month))];
+                els.monthSelect.innerHTML = '<option value="">Selecione...</option>';
+                months.forEach(m => els.monthSelect.innerHTML += `<option value="${m}">${m}</option>`);
+                els.monthSelect.disabled = false;
+                els.titleSelect.innerHTML = '<option value="">Selecione...</option>';
+                els.titleSelect.disabled = true;
+            });
+        }
+        if(els.monthSelect) {
+            els.monthSelect.addEventListener('change', function() {
+                const m = this.value;
+                const y = els.yearSelect.value;
+                const titles = masterData.filter(d => d.year == y && d.month == m);
+                els.titleSelect.innerHTML = '<option value="">Selecione...</option>';
+                titles.forEach(t => els.titleSelect.innerHTML += `<option value="${t.link}">${t.title}</option>`);
+                els.titleSelect.disabled = false;
+            });
+        }
+        if(els.titleSelect) {
+            els.titleSelect.addEventListener('change', function() {
+                if(this.value) {
+                    currentSheetTitle = this.options[this.selectedIndex].text;
+                    fetchAndRenderTarget(this.value);
+                }
+            });
+        }
+
+        attemptAutoLogin();
+    });
