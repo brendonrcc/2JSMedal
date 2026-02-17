@@ -1,12 +1,138 @@
-  // LOGIN AND AUTH LOGIC
+  // Global State
     let currentUser = null;
+    let globalGratificationSet = new Set();
+    let membersCache = {};
+    let forceBypassCache = false;
+    let masterData = []; 
+    let currentRenderData = []; 
+    let currentSheetTitle = '';
+    let forumTokens = null; 
+    let currentRankKey = '';
+    let pendingPostData = { cargo: '', title: '', groupedStatuses: {} };
+    let leadershipLeaves = [];
+    let leadershipReturns = [];
+    
+    // DOM Elements
+    let els = {}; 
+
+    // Configs
+    const MASTER_BASE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRAm7FkCrMwblbAPjFnuxoxeZNHdAc18M7bm-qR3k2YqB_i047AJ0LduIJjJ9iP7ZqT7dGpzFWtY2mp/pub";
+    const TARGET_SHEET_NAME = "[EFE] Contador";
+    const LOG_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyPdKr_TJ6IMcLUFAavHVFaSg6e2vhjsALDFtQo2zMkmU5aQ3_KCUQGUex5fgYLoWnnuw/exec";
+    const MEMBERS_SHEET_ID = "1Y09nybDM7GdOMpO03QZyoh0UP1-Or0CYyV_shKh84Oc";
+    const MEMBERS_GID = "1532718941";
+    const LEADERSHIP_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxHypeBU-eM4pEUpkUNP68WWkR_SnoGrKGqz5P6Z30IzgLpX5MhTJ3hyPYkewWf01jKNg/exec";
+    const CACHE_DURATION_MS = 1000 * 60 * 5; 
+
+    const RANK_CONFIG = {
+         'Professor': { gid: '0', topicId: '38482', nickCol: 19, classCols: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], headerLabels: ['APB', 'API', 'APA', 'AFP', 'AFO', 'CICE', 'Av.CE', 'AFCE', 'ASC', 'DOA', 'ACOM'], weights: [25, 20, 20, 15, 15, 15, 25, 15, 20, 0, 10], statusCol: 33, checkCol: 31, period: 'SEMANAL', superiorKeywords: ["mentor", "capacitador", "graduador", "estagiário", "ministro", "vice-líder", "líder"] },
+         'Mentor': { gid: '972474941', topicId: '38483', nickCol: 17, classCols: [18, 19, 20, 21], headerLabels: ['AS', 'ACOM', 'SUPL', 'IAL'], weights: [50, 75, 50, 25], statusCol: 24, checkCol: 22, period: 'SEMANAL', superiorKeywords: ["capacitador", "graduador", "estagiário", "ministro", "vice-líder", "líder"] },
+         'Capacitador': { gid: '1681958430', topicId: '38625', nickCol: 17, classCols: [18 ,19, 20, 21, 22, 23], headerLabels: ['CTP', 'CPP', 'CPM', 'CED', 'AEB', 'TCE'], weights: [50, 50, 50, 50, 50, 50], statusCol: 26, checkCol: 24, period: 'SEMANAL', superiorKeywords: ["graduador", "estagiário", "ministro", "vice-líder", "líder"] },
+         'Graduador': { gid: '1707625426', topicId: '38484', nickCol: 17, classCols: [18, 19, 20],  headerLabels: ['Básica', 'Inter.', 'Avançada'], weights: [1, 1, 1], statusCol: 23, checkCol: 21, period: 'QUINZENAL', superiorKeywords: ["Estagiário(a)", "ministro(a)", "vice-líder", "líder"] }
+    };
+    
+    const statusMap = { "[A]": { text: "Positivo", code: "A" }, "[B]": { text: "Negativo", code: "B" }, "[IS]": { text: "Isenção", code: "IS" }, "[DO]": { text: "Doação", code: "DO" }, "[J]": { text: "Justificada", code: "J" }, "[GP]": { text: "Grad. Pend.", code: "GP" }, "[RL]": { text: "Retorno", code: "RL" }, "[L]":  { text: "Licença", code: "L" }, "[CE]": { text: "Caso Esp.", code: "CE" }, "[Z]":  { text: "Caso Esp.", code: "CE" }, "[ER]": { text: "Entrada Recente", code: "ER" } };
+     
+    const SHEET_STATUS_MAP = {
+         'A': 'Positivo', 'PRO': 'Positivo', 'POSITIVO': 'Positivo',
+         'B': 'Negativo', 'NEGATIVO': 'Negativo',
+         'IS': 'Isento',
+         'J': 'Justificado',
+         'L': 'Licença',
+         'RL': 'Retorno',
+         'GP': 'Graduação Pendente',
+         'CE': 'Caso Especial',
+         'DO': 'Doação',
+         'ER': 'Entrada Recente'
+    };
+
+    // --- Initialization ---
+    window.addEventListener('DOMContentLoaded', () => {
+        // Initialize Elements Object
+        els = {
+            navBtns: document.querySelectorAll('.rank-pill'), 
+            filtersPanel: document.getElementById('filters-panel'),
+            yearSelect: document.getElementById('select-year'),
+            monthSelect: document.getElementById('select-month'),
+            titleSelect: document.getElementById('select-title'),
+            tableHead: document.getElementById('table-head'),
+            tableBody: document.getElementById('table-body'),
+            emptyMsg: document.getElementById('empty-message'),
+            toolbar: document.getElementById('table-toolbar'),
+            btnPost: document.getElementById('btn-post'),
+            textPost: document.getElementById('text-post')
+        };
+
+        // Initialize Turbo Mode
+        const isTurbo = localStorage.getItem('om_turbo_mode') === 'true';
+        if(isTurbo) {
+            document.body.classList.add('turbo-mode');
+            if(document.getElementById('turbo-btn')) {
+                const btn = document.getElementById('turbo-btn');
+                btn.classList.add('active');
+                btn.querySelector('i').className = 'fas fa-bolt';
+            }
+        }
+
+        // Attach Filter Listeners
+        if(els.yearSelect) {
+            els.yearSelect.addEventListener('change', () => {
+                const selectedYear = els.yearSelect.value;
+                if (!selectedYear) return;
+                const filteredMonths = [...new Set(masterData.filter(d => d.year === selectedYear).map(d => d.month))];
+                els.monthSelect.innerHTML = '<option value="">Selecione...</option>';
+                filteredMonths.forEach(m => els.monthSelect.innerHTML += `<option value="${m}">${m}</option>`);
+                els.monthSelect.disabled = false;
+                els.titleSelect.innerHTML = '<option value="">Selecione...</option>'; els.titleSelect.disabled = true;
+            });
+        }
+
+        if(els.monthSelect) {
+            els.monthSelect.addEventListener('change', () => {
+                const year = els.yearSelect.value;
+                const month = els.monthSelect.value;
+                const filteredTitles = masterData.filter(d => d.year === year && d.month === month);
+                els.titleSelect.innerHTML = '<option value="">Selecione...</option>';
+                filteredTitles.forEach(t => els.titleSelect.innerHTML += `<option value="${t.link}">${t.title}</option>`);
+                els.titleSelect.disabled = false;
+            });
+        }
+
+        if(els.titleSelect) {
+            els.titleSelect.addEventListener('change', async () => {
+                if(els.titleSelect.value) {
+                    currentSheetTitle = els.titleSelect.options[els.titleSelect.selectedIndex].text;
+                    await fetchAndRenderTarget(els.titleSelect.value);
+                }
+            });
+        }
+
+        // Leadership Year/Month init
+        const ySelect = document.getElementById('lid-year');
+        if(ySelect) {
+             const currentY = new Date().getFullYear();
+             for(let y = currentY; y >= 2023; y--) {
+                 ySelect.innerHTML += `<option value="${y}">${y}</option>`;
+             }
+        }
+        const mSelect = document.getElementById('lid-month');
+        if(mSelect) {
+             mSelect.value = String(new Date().getMonth() + 1).padStart(2, '0');
+        }
+
+        // Start Application
+        attemptAutoLogin();
+        selectRank('Professor');
+    });
+
+    // --- Core Functions ---
+    
+    function cleanCell(c) { return c ? c.replace(/^"|"$/g, '').trim() : ""; }
 
     async function pegarUsername() {
         try {
-            // Check if we are running locally to simulate login, otherwise fetch from forum
             if(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
                 console.log("Ambiente local detectado. Retornando 'Anônimo' para teste (ou mude aqui).");
-                // return "SeuNickLocal"; // Uncomment to test authorized user locally
             }
             
             let resposta = await fetch("/forum");
@@ -21,22 +147,24 @@
     }
 
     async function attemptAutoLogin() {
+        const userDisplay = document.getElementById('user-display-name');
+        const roleDisplay = document.getElementById('user-display-role');
+        const avatarImg = document.getElementById('user-avatar-img');
+        const screen = document.getElementById('login-screen');
+        
         const loadingEl = document.getElementById('login-loading');
         const errorEl = document.getElementById('login-error');
         const errorMsg = document.getElementById('login-error-msg');
 
-        // 1. Get Forum Username
         const username = await pegarUsername();
 
-        // 2. Check if anonymous
         if (!username || username === 'Anônimo') {
-            loadingEl.classList.add('hidden');
-            errorEl.classList.remove('hidden');
-            errorMsg.textContent = "Você não está logado no fórum.";
+            if(loadingEl) loadingEl.classList.add('hidden');
+            if(errorEl) errorEl.classList.remove('hidden');
+            if(errorMsg) errorMsg.textContent = "Você não está logado no fórum.";
             return;
         }
 
-        // 3. Verify in TSV
         try {
             const url = `https://docs.google.com/spreadsheets/d/${MEMBERS_SHEET_ID}/export?gid=${MEMBERS_GID}&format=tsv`;
             const tsvData = await fetchSmart(url, false);
@@ -44,22 +172,17 @@
 
             if (user) {
                 currentUser = user;
-                // Success Login
-                document.getElementById('login-screen').classList.add('hidden-login');
-                setTimeout(() => {
-                    document.getElementById('login-screen').style.display = 'none';
-                    openGratModal();
-                }, 500);
-
-                // Show Sidebar
-                document.getElementById('sidebar-nav').classList.remove('hidden');
-
-                // Update UI with user info
-                document.getElementById('user-display-name').textContent = user.nick;
-                document.getElementById('user-display-role').textContent = user.role;
-                document.getElementById('user-avatar-img').src = `https://www.habbo.com.br/habbo-imaging/avatarimage?user=${user.nick}&direction=2&head_direction=3&gesture=sml&size=m&headonly=1`;
                 
-                // Auto-fill inputs
+                if(userDisplay) {
+                    userDisplay.classList.remove('animate-pulse');
+                    userDisplay.textContent = user.nick;
+                }
+                if(roleDisplay) roleDisplay.textContent = user.role;
+                if(avatarImg) avatarImg.src = `https://www.habbo.com.br/habbo-imaging/avatarimage?user=${user.nick}&direction=2&head_direction=3&gesture=sml&size=m&headonly=1`;
+
+                const sidebar = document.getElementById('sidebar-nav');
+                if(sidebar) sidebar.classList.remove('hidden');
+
                 const responsibleInputs = ['gen-responsible', 'min-responsible', 'lid-responsible'];
                 responsibleInputs.forEach(id => {
                     const el = document.getElementById(id);
@@ -67,17 +190,24 @@
                 });
 
                 showToast(`Bem-vindo, ${user.nick}!`, 'success');
+                openGratModal();
+                
+                if(screen) {
+                    screen.classList.add('hidden-login');
+                    setTimeout(() => { screen.style.display = 'none'; }, 500);
+                }
+                
             } else {
-                loadingEl.classList.add('hidden');
-                errorEl.classList.remove('hidden');
-                errorMsg.innerHTML = `O usuário <b class="text-white">${username}</b> não possui permissão.<br>Entre em contato com a liderança.`;
+                if(loadingEl) loadingEl.classList.add('hidden');
+                if(errorEl) errorEl.classList.remove('hidden');
+                if(errorMsg) errorMsg.innerHTML = `O usuário <b class="text-white">${username}</b> não possui permissão.<br>Entre em contato com a liderança.`;
             }
 
         } catch (error) {
             console.error(error);
-            loadingEl.classList.add('hidden');
-            errorEl.classList.remove('hidden');
-            errorMsg.textContent = "Erro de conexão ao verificar permissões. Tente recarregar.";
+            if(loadingEl) loadingEl.classList.add('hidden');
+            if(errorEl) errorEl.classList.remove('hidden');
+            if(errorMsg) errorMsg.textContent = "Erro de conexão ao verificar permissões. Tente recarregar.";
         }
     }
 
@@ -87,14 +217,12 @@
 
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
-            // Check Col B (Index 1) -> Role A (Index 0)
             if (row.length > 1) {
                 const nickB = cleanCell(row[1]).toLowerCase();
                 if (nickB === search) {
                     return { nick: cleanCell(row[1]), role: cleanCell(row[0]) };
                 }
             }
-            // Check Col P (Index 15) -> Role O (Index 14)
             if (row.length > 15) {
                 const nickP = cleanCell(row[15]).toLowerCase();
                 if (nickP === search) {
@@ -105,11 +233,9 @@
         return null;
     }
 
-    // NEW MOBILE MENU LOGIC
     function toggleMobileMenu() {
         const sidebar = document.getElementById('app-sidebar');
         const overlay = document.getElementById('sidebar-overlay');
-        
         const isClosed = sidebar.classList.contains('-translate-x-full');
         
         if (isClosed) {
@@ -129,18 +255,13 @@
             overlay.classList.add('hidden');
         }
     }
-
-    // GLOBAL GRATIFICATION LIST
-     let globalGratificationSet = new Set();
  
-     // Helper for cleaning cells globally
-     function cleanCell(c) { return c ? c.replace(/^"|"$/g, '').trim() : ""; }
+    function openGratModal() {
+         const modal = document.getElementById('startup-grat-modal');
+         if(modal) modal.classList.add('open');
+    }
  
-     function openGratModal() {
-         document.getElementById('startup-grat-modal').classList.add('open');
-     }
- 
-     function saveGlobalGratifications() {
+    function saveGlobalGratifications() {
          const text = document.getElementById('startup-grat-input').value;
          globalGratificationSet.clear();
          
@@ -158,18 +279,18 @@
          
          document.getElementById('startup-grat-modal').classList.remove('open');
          
-         // Refresh views if they are open
          if(!document.getElementById('view-metas').classList.contains('hidden-view') && els.titleSelect.value) {
              fetchAndRenderTarget(els.titleSelect.value);
          }
          if(!document.getElementById('subview-general').classList.contains('hidden') && document.getElementById('gen-input-text').value) {
              parseGeneralReport();
          }
-     }
+    }
  
-     function toggleTurbo() {
+    function toggleTurbo() {
          const body = document.body;
          const btn = document.getElementById('turbo-btn');
+         if(!btn) return;
          const icon = btn.querySelector('i');
          
          body.classList.toggle('turbo-mode');
@@ -183,10 +304,9 @@
              icon.className = 'fas fa-rocket';
          }
          localStorage.setItem('om_turbo_mode', isActive);
-     }
+    }
  
-     // --- GLOBAL FUNCTIONS TO FIX REFERENCE ERRORS ---
-     function toggleBBCodeEditor() {
+    function toggleBBCodeEditor() {
          const container = document.getElementById('bbcode-editor-container');
          const btnText = document.getElementById('btn-toggle-text');
          if (!container || !btnText) return;
@@ -199,52 +319,13 @@
              container.classList.add('hidden');
              btnText.innerText = "Editar BBCode";
          }
-     }
+    }
  
-     function closePostModal() {
+    function closePostModal() {
          document.getElementById('post-confirm-modal').classList.remove('open');
-     }
-     // ------------------------------------------------
+    }
  
-     window.addEventListener('DOMContentLoaded', () => {
-         const isTurbo = localStorage.getItem('om_turbo_mode') === 'true';
-         if(isTurbo) {
-             document.body.classList.add('turbo-mode');
-             if(document.getElementById('turbo-btn')) {
-                 const btn = document.getElementById('turbo-btn');
-                 btn.classList.add('active');
-                 btn.querySelector('i').className = 'fas fa-bolt';
-             }
-         } else {
-              // Default state icon
-              if(document.getElementById('turbo-btn')) {
-                 document.getElementById('turbo-btn').querySelector('i').className = 'fas fa-rocket';
-              }
-         }
-         
-         // Trigger Auto Login
-         attemptAutoLogin();
-         
-         // Init Base
-         init(); 
-         
-         const ySelect = document.getElementById('lid-year');
-         if(ySelect) {
-             const currentY = new Date().getFullYear();
-             for(let y = currentY; y >= 2023; y--) {
-                 ySelect.innerHTML += `<option value="${y}">${y}</option>`;
-             }
-         }
-         
- 
-         const mSelect = document.getElementById('lid-month');
-         if(mSelect) {
-             mSelect.value = String(new Date().getMonth() + 1).padStart(2, '0');
-         }
-     });
- 
- 
-     function switchView(viewName) {
+    function switchView(viewName) {
          document.getElementById('view-metas').classList.add('hidden-view');
          document.getElementById('view-medalhas').classList.add('hidden-view');
          document.getElementById('tab-metas').classList.remove('active');
@@ -252,9 +333,9 @@
  
          document.getElementById(`view-${viewName}`).classList.remove('hidden-view');
          document.getElementById(`tab-${viewName}`).classList.add('active');
-     }
+    }
  
-     function toggleMedalSubTab(tab) {
+    function toggleMedalSubTab(tab) {
          const generalView = document.getElementById('subview-general');
          const leadView = document.getElementById('subview-leadership');
          const minView = document.getElementById('subview-ministry');
@@ -282,9 +363,9 @@
              if(tabMin) tabMin.classList.add('active');
              if(Object.keys(membersCache).length === 0) fetchMembersData();
          }
-     }
+    }
  
-     function showToast(message, type = 'info', title = '') {
+    function showToast(message, type = 'info', title = '') {
          const container = document.getElementById('toast-container');
          const config = {
              success: { icon: 'fa-check-circle', title: 'Sucesso' },
@@ -315,9 +396,9 @@
              toast.classList.remove('visible');
              setTimeout(() => toast.remove(), 500); 
          }, 4000);
-     }
+    }
  
-     function showCustomConfirm(title, message) {
+    function showCustomConfirm(title, message) {
          return new Promise((resolve) => {
              const modal = document.getElementById('custom-modal');
              const titleEl = document.getElementById('modal-title');
@@ -338,14 +419,9 @@
              confirmBtn.onclick = () => close(true);
              cancelBtn.onclick = () => close(false);
          });
-     }
+    }
  
-     const LEADERSHIP_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxHypeBU-eM4pEUpkUNP68WWkR_SnoGrKGqz5P6Z30IzgLpX5MhTJ3hyPYkewWf01jKNg/exec";
-     
-     let leadershipLeaves = [];
-     let leadershipReturns = [];
- 
-     async function loadLeadershipData() {
+    async function loadLeadershipData() {
          const year = document.getElementById('lid-year').value;
          const month = document.getElementById('lid-month').value;
          const grid = document.getElementById('leadership-grid');
@@ -429,9 +505,9 @@
              showToast("Erro técnico: " + e.message, "error");
              grid.innerHTML = `<div class="col-span-full text-center text-red-500 font-bold bg-[#161b22] p-6 rounded-xl border border-red-900"><i class="fas fa-bug mb-2 text-2xl"></i><br>${e.message}</div>`;
          }
-     }
+    }
  
-     function parseLeavesFromJSON(rows) {
+    function parseLeavesFromJSON(rows) {
          leadershipLeaves = [];
          if(!rows || !Array.isArray(rows)) return;
  
@@ -450,9 +526,9 @@
                  days: days
              });
          }
-     }
+    }
  
-     function parseReturnsFromJSON(rows) {
+    function parseReturnsFromJSON(rows) {
          leadershipReturns = [];
          if(!rows || !Array.isArray(rows)) return;
  
@@ -469,9 +545,9 @@
                  nick: nick
              });
          }
-     }
+    }
  
-     function parseDateCustom(str) {
+    function parseDateCustom(str) {
          if(!str) return null;
          if (str instanceof Date) return str;
  
@@ -498,9 +574,9 @@
          if(!isNaN(nativeDate.getTime())) return nativeDate;
  
          return null;
-     }
+    }
  
-     async function openLeaderDetails(nick, role, month, year) {
+    async function openLeaderDetails(nick, role, month, year) {
          const modal = document.getElementById('custom-modal');
          const titleEl = document.getElementById('modal-title');
          const descEl = document.getElementById('modal-desc');
@@ -777,11 +853,9 @@
          cancelBtn.onclick = () => { modal.classList.remove('open'); };
          setLeaderCalcMode('auto'); 
          modal.classList.add('open');
-     }
+    }
  
-     let forceBypassCache = false;
- 
-     async function fetchSmart(targetUrl, isGViz = false) {
+    async function fetchSmart(targetUrl, isGViz = false) {
          const cacheKey = `EFE_CACHE_V2_${targetUrl}`;
          
          if (!forceBypassCache) {
@@ -794,7 +868,6 @@
              } catch(e) { console.warn("Cache read error", e); }
          }
  
-         // Improved proxy list and order
          const proxies = [
              (url) => `https://proxy.reinasdev.workers.dev/?url=${encodeURIComponent(url)}`
          ];
@@ -802,7 +875,6 @@
          for (const proxyGen of proxies) {
              try {
                  let finalUrl = proxyGen(targetUrl);
-                 // AllOrigins requires parsing JSON 'contents'
                  const isAllOrigins = finalUrl.includes('allorigins');
                  
                  if (forceBypassCache) {
@@ -810,7 +882,7 @@
                  }
  
                  const controller = new AbortController();
-                 const timeoutId = setTimeout(() => controller.abort(), 10000); // Increased timeout
+                 const timeoutId = setTimeout(() => controller.abort(), 10000); 
  
                  const resp = await fetch(finalUrl, { signal: controller.signal });
                  clearTimeout(timeoutId);
@@ -837,9 +909,9 @@
              }
          }
          throw new Error("Não foi possível carregar os dados. Verifique sua conexão ou tente mais tarde.");
-     }
+    }
  
-     async function reloadMetas() {
+    async function reloadMetas() {
          const btn = event.currentTarget;
          const icon = btn.querySelector('i');
          icon.classList.add('fa-spin');
@@ -874,20 +946,17 @@
              icon.classList.remove('fa-spin');
              forceBypassCache = false;
          }
-     }
+    }
  
-     function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-     
-     // --- Lógica de Membros Gerais (Parse) ---
-     let generalData = { date: "", positives: [], negatives: [], alreadyPosted: [] };
- 
-     function parseGeneralReport() {
+    function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+    
+    // --- Lógica de Membros Gerais (Parse) ---
+    let generalData = { date: "", positives: [], negatives: [], alreadyPosted: [] };
+
+    function parseGeneralReport() {
          const text = document.getElementById('gen-input-text').value;
          const dateInput = document.getElementById('gen-detected-date');
          
-         // Use Global Gratification List for filtering
-         
-         // Reset lists but keep existing arrays for now
          let newPositives = [];
          let newNegatives = [];
          
@@ -899,7 +968,6 @@
              return; 
          }
  
-         // Tentar detectar data
          const dateRegex = /(?:período de|meta.*de)\s+([0-9]{1,2}\s+[A-Za-zç]+\s+[0-9]{4}\s+(?:a|até)\s+[0-9]{1,2}\s+[A-Za-zç]+\s+[0-9]{4})/i;
          const dateMatch = text.match(dateRegex);
          
@@ -926,14 +994,11 @@
          lines.forEach(line => {
              let cleanLine = line.trim();
              
-             // IGNORE FILTERS based on user request
              if (cleanLine.includes('DESEMPENHO SEMANAL') || cleanLine.includes('Página') || cleanLine.match(/^\d+\./)) return;
-             // Also ignore specific garbage
              if (cleanLine.startsWith('✮ 01.')) return; 
  
              const upperLine = cleanLine.toUpperCase();
  
-             // Detect Sections
              if(upperLine.includes('DESTAQUES')) { currentSection = 'highlight'; return; }
              if(upperLine.includes('POSITIVOS')) { currentSection = 'positive'; return; }
              if(upperLine.includes('NEGATIVOS')) { currentSection = 'negative'; return; }
@@ -941,25 +1006,19 @@
  
              if(currentSection === 'none' || currentSection === 'ignore') return;
              
-             // Clean brackets now
              cleanLine = cleanLine.replace(/\[.*?\]/g, '').trim(); 
              if(cleanLine.length < 2) return;
  
              let temp = cleanLine;
  
-             // Remove starting bullets/stars
              temp = temp.replace(/^[•\-✮\s]+/, ''); 
-             // Remove lingering stars/bullets inside
              temp = temp.replace(/[•✮]/g, '');
  
-             // Remove points suffix: "10 Pontos", "- 10 Pontos", "10 Ponto"
-             // Regex: Optional space/dash, digits, optional space, Ponto(s)
              temp = temp.replace(/[\s\-]*\d+\s*Pontos?.*$/i, '');
              
-             // Safety: Remove just "Pontos" if no number
              temp = temp.replace(/[\s\-]*Pontos?.*$/i, '');
  
-             let extractedNick = temp.trim().split(/\s+/)[0]; // Split by whitespace and take first
+             let extractedNick = temp.trim().split(/\s+/)[0]; 
  
              if(extractedNick && extractedNick.length > 1) {
                   const checkUpper = extractedNick.toUpperCase();
@@ -979,9 +1038,9 @@
          generalData.negatives = [...new Set(newNegatives)];
  
          renderGeneralResults();
-     }
+    }
  
-     function renderGeneralResults() {
+    function renderGeneralResults() {
          const resPos = document.getElementById('gen-result-positive');
          const resNeg = document.getElementById('gen-result-negative');
          const statusPos = document.getElementById('gen-status-pos');
@@ -991,14 +1050,11 @@
          const btnNeg = document.getElementById('btn-post-gen-neg');
          const btnPunish = document.getElementById('btn-post-gen-punish');
  
-         // Logic for Comparison (INTERSECTION / FILTER) using Global Set
          const hasFilter = globalGratificationSet.size > 0;
          
-         // Se tiver filtro, mantém APENAS quem está no set (has). Se não tiver filtro, mantém todos.
          const pendingPos = hasFilter ? generalData.positives.filter(n => globalGratificationSet.has(n.toLowerCase())) : generalData.positives;
          const pendingNeg = hasFilter ? generalData.negatives.filter(n => globalGratificationSet.has(n.toLowerCase())) : generalData.negatives;
          
-         // Debug/Status info
          const rejectedPosCount = generalData.positives.length - pendingPos.length;
          const rejectedNegCount = generalData.negatives.length - pendingNeg.length;
  
@@ -1019,16 +1075,15 @@
          btnPos.disabled = pendingPos.length === 0;
          btnNeg.disabled = pendingNeg.length === 0;
          btnPunish.disabled = pendingNeg.length === 0;
-     }
+    }
  
-     function openGeneralMedalLink(type) {
+    function openGeneralMedalLink(type) {
          const responsible = document.getElementById('gen-responsible').value;
          const role = document.getElementById('gen-role').value;
          const date = generalData.date || document.getElementById('gen-detected-date').value;
  
          if(!responsible) { showToast("Preencha o Responsável.", "warning"); return; }
          
-         // Use Global Gratification List for filtering
          const hasFilter = globalGratificationSet.size > 0;
          const fullList = type === 'positive' ? generalData.positives : generalData.negatives;
          
@@ -1056,10 +1111,9 @@
          });
          
          window.open(`https://www.policiarcc.com/h17-postagem-de-medalhas-af?${params.toString()}`, '_blank');
-     }
+    }
  
-     function openGeneralPunishmentLink() {
-         // Use Global Gratification List for filtering
+    function openGeneralPunishmentLink() {
          const hasFilter = globalGratificationSet.size > 0;
          const fullList = generalData.negatives;
          
@@ -1080,67 +1134,9 @@
          params.set('comprovacoes_g1', 'https://www.policiarcc.com/t38367');
          
          window.open(`${baseUrl}?${params.toString()}`, '_blank');
-     }
+    }
  
-     const MASTER_BASE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRAm7FkCrMwblbAPjFnuxoxeZNHdAc18M7bm-qR3k2YqB_i047AJ0LduIJjJ9iP7ZqT7dGpzFWtY2mp/pub";
-     const TARGET_SHEET_NAME = "[EFE] Contador";
-     const LOG_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyPdKr_TJ6IMcLUFAavHVFaSg6e2vhjsALDFtQo2zMkmU5aQ3_KCUQGUex5fgYLoWnnuw/exec";
-     
-     const MEMBERS_SHEET_ID = "1Y09nybDM7GdOMpO03QZyoh0UP1-Or0CYyV_shKh84Oc";
-     const MEMBERS_GID = "1532718941";
-     let membersCache = {};
- 
-     const CACHE_DURATION_MS = 1000 * 60 * 5; 
- 
-     const RANK_CONFIG = {
-         'Professor': { gid: '0', topicId: '38482', nickCol: 19, classCols: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], headerLabels: ['APB', 'API', 'APA', 'AFP', 'AFO', 'CICE', 'Av.CE', 'AFCE', 'ASC', 'DOA', 'ACOM'], weights: [25, 20, 20, 15, 15, 15, 25, 15, 20, 0, 10], statusCol: 33, checkCol: 31, period: 'SEMANAL', superiorKeywords: ["mentor", "capacitador", "graduador", "estagiário", "ministro", "vice-líder", "líder"] },
-         'Mentor': { gid: '972474941', topicId: '38483', nickCol: 17, classCols: [18, 19, 20, 21], headerLabels: ['AS', 'ACOM', 'SUPL', 'IAL'], weights: [50, 75, 50, 25], statusCol: 24, checkCol: 22, period: 'SEMANAL', superiorKeywords: ["capacitador", "graduador", "estagiário", "ministro", "vice-líder", "líder"] },
-         'Capacitador': { gid: '1681958430', topicId: '38625', nickCol: 17, classCols: [18 ,19, 20, 21, 22, 23], headerLabels: ['CTP', 'CPP', 'CPM', 'CED', 'AEB', 'TCE'], weights: [50, 50, 50, 50, 50, 50], statusCol: 26, checkCol: 24, period: 'SEMANAL', superiorKeywords: ["graduador", "estagiário", "ministro", "vice-líder", "líder"] },
-         'Graduador': { gid: '1707625426', topicId: '38484', nickCol: 17, classCols: [18, 19, 20],  headerLabels: ['Básica', 'Inter.', 'Avançada'], weights: [1, 1, 1], statusCol: 23, checkCol: 21, period: 'QUINZENAL', superiorKeywords: ["Estagiário(a)", "ministro(a)", "vice-líder", "líder"] }
-     };
- 
-     let currentRankKey = '';
-     let masterData = []; 
-     let currentRenderData = []; 
-     let currentSheetTitle = '';
-     let forumTokens = null; 
-     
-     let pendingPostData = {
-         cargo: '',
-         title: '',
-         groupedStatuses: {} 
-     };
-     
-     const statusMap = { "[A]": { text: "Positivo", code: "A" }, "[B]": { text: "Negativo", code: "B" }, "[IS]": { text: "Isenção", code: "IS" }, "[DO]": { text: "Doação", code: "DO" }, "[J]": { text: "Justificada", code: "J" }, "[GP]": { text: "Grad. Pend.", code: "GP" }, "[RL]": { text: "Retorno", code: "RL" }, "[L]":  { text: "Licença", code: "L" }, "[CE]": { text: "Caso Esp.", code: "CE" }, "[Z]":  { text: "Caso Esp.", code: "CE" }, "[ER]": { text: "Entrada Recente", code: "ER" } };
-     
-     const SHEET_STATUS_MAP = {
-         'A': 'Positivo', 'PRO': 'Positivo', 'POSITIVO': 'Positivo',
-         'B': 'Negativo', 'NEGATIVO': 'Negativo',
-         'IS': 'Isento',
-         'J': 'Justificado',
-         'L': 'Licença',
-         'RL': 'Retorno',
-         'GP': 'Graduação Pendente',
-         'CE': 'Caso Especial',
-         'DO': 'Doação',
-         'ER': 'Entrada Recente'
-     };
- 
-     const els = {
-         navBtns: document.querySelectorAll('.rank-pill'), 
-         filtersPanel: document.getElementById('filters-panel'),
-         yearSelect: document.getElementById('select-year'),
-         monthSelect: document.getElementById('select-month'),
-         titleSelect: document.getElementById('select-title'),
-         tableHead: document.getElementById('table-head'),
-         tableBody: document.getElementById('table-body'),
-         emptyMsg: document.getElementById('empty-message'),
-         toolbar: document.getElementById('table-toolbar'),
-         btnPost: document.getElementById('btn-post'),
-         textPost: document.getElementById('text-post')
-     };
- 
-     async function fetchMembersData() {
+    async function fetchMembersData() {
          if(Object.keys(membersCache).length > 0 && !forceBypassCache) return;
          
          try {
@@ -1189,9 +1185,9 @@
          } catch (e) {
              console.error("Erro ao carregar lista de membros:", e);
          }
-     }
+    }
  
-     function renderSkeleton(colsCount = 5, rowsCount = 8) {
+    function renderSkeleton(colsCount = 5, rowsCount = 8) {
          let html = '';
          for(let i=0; i<rowsCount; i++) {
              let cells = '';
@@ -1200,13 +1196,9 @@
          }
          els.tableBody.innerHTML = html;
          els.emptyMsg.classList.add('hidden');
-     }
+    }
  
-     async function init() { 
-         await selectRank('Professor'); 
-     }
- 
-     function parseMasterData(tsvText) {
+    function parseMasterData(tsvText) {
          const rows = tsvText.split('\n').map(r => r.split('\t'));
          masterData = [];
          
@@ -1222,11 +1214,9 @@
              let title = cleanCell(col[2]);
              let link = cleanCell(col[3]);
  
-             // Skip header if detected
              if (year.toLowerCase().includes('ano') && month.toLowerCase().includes('mês')) continue;
              if (year.toLowerCase() === 'ano') continue;
  
-             // Fill down logic for merged cells
              if (year) {
                  lastYear = year;
              } else {
@@ -1239,17 +1229,15 @@
                  month = lastMonth;
              }
  
-             // We push only if we have a Year, Title and Link
              if (year && title && link) {
                  masterData.push({ year, month, title, link });
              }
          }
-     }
+    }
  
-     async function fetchTopicTokens(topicId) {
+    async function fetchTopicTokens(topicId) {
          forumTokens = null; 
          
-         // Se não estiver no domínio do fórum, ignora silenciosamente para evitar erro de rede no console local
          if(!window.location.hostname.includes('policiarcc.com') && !window.location.hostname.includes('policiarcc.forumeiros.com')) {
              console.log("Ignorando tokens de fórum (Ambiente externo)");
              return;
@@ -1274,12 +1262,11 @@
                  forumTokens = { action, inputs };
              }
          } catch(e) { 
-             // Silenciar erro de rede para não spammar toast, apenas logar
              console.warn("Tokens de postagem: " + e.message); 
          }
-     }
+    }
  
-     window.selectRank = async function(rankName) {
+    async function selectRank(rankName) {
          currentRankKey = rankName;
          document.querySelectorAll('.rank-pill').forEach(btn => {
              if(btn.getAttribute('data-title').includes(rankName)) btn.classList.add('active');
@@ -1292,7 +1279,7 @@
  
          els.tableBody.innerHTML = '';
          els.emptyMsg.classList.remove('hidden');
-         els.toolbar.classList.add('hidden');
+         if(els.toolbar) els.toolbar.classList.add('hidden');
          
          els.yearSelect.innerHTML = '<option value="">Carregando...</option>'; els.yearSelect.disabled = true;
          els.monthSelect.innerHTML = '<option value="">Aguarde...</option>'; els.monthSelect.disabled = true;
@@ -1308,56 +1295,27 @@
              parseMasterData(text);
              populateYears();
          } catch (error) { console.error(error); }
-     }
+    }
  
-     function populateYears() {
+    function populateYears() {
          const uniqueYears = [...new Set(masterData.map(d => d.year))].sort().reverse();
          els.yearSelect.innerHTML = '<option value="">Selecione...</option>';
          uniqueYears.forEach(y => els.yearSelect.innerHTML += `<option value="${y}">${y}</option>`);
          els.yearSelect.disabled = false;
          els.monthSelect.innerHTML = '<option value="">Selecione...</option>'; els.monthSelect.disabled = true;
          els.titleSelect.innerHTML = '<option value="">Selecione...</option>'; els.titleSelect.disabled = true;
-     }
+    }
  
-     els.yearSelect.addEventListener('change', () => {
-         const selectedYear = els.yearSelect.value;
-         if (!selectedYear) return;
-         const filteredMonths = [...new Set(masterData.filter(d => d.year === selectedYear).map(d => d.month))];
-         els.monthSelect.innerHTML = '<option value="">Selecione...</option>';
-         filteredMonths.forEach(m => els.monthSelect.innerHTML += `<option value="${m}">${m}</option>`);
-         els.monthSelect.disabled = false;
-         els.titleSelect.innerHTML = '<option value="">Selecione...</option>'; els.titleSelect.disabled = true;
-     });
- 
-     els.monthSelect.addEventListener('change', () => {
-         const year = els.yearSelect.value;
-         const month = els.monthSelect.value;
-         const filteredTitles = masterData.filter(d => d.year === year && d.month === month);
-         els.titleSelect.innerHTML = '<option value="">Selecione...</option>';
-         filteredTitles.forEach(t => els.titleSelect.innerHTML += `<option value="${t.link}">${t.title}</option>`);
-         els.titleSelect.disabled = false;
-     });
- 
-     els.titleSelect.addEventListener('change', async () => {
-         if(els.titleSelect.value) {
-             currentSheetTitle = els.titleSelect.options[els.titleSelect.selectedIndex].text;
-             await fetchAndRenderTarget(els.titleSelect.value);
-         }
-     });
- 
-     // cleanCell is now global
- 
-     async function fetchAndRenderTarget(originalUrl) {
+    async function fetchAndRenderTarget(originalUrl) {
          const config = RANK_CONFIG[currentRankKey];
          renderHeader(config);
          renderSkeleton(config.headerLabels.length, 8); 
-         els.toolbar.classList.add('hidden');
+         if(els.toolbar) els.toolbar.classList.add('hidden');
          currentRenderData = [];
          
          try {
              await fetchMembersData();
  
-             // GRAB THE GRATIFICATION FILTER LIST FROM GLOBAL
              const hasGratFilter = globalGratificationSet.size > 0;
  
              const idMatch = originalUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
@@ -1402,7 +1360,7 @@
                              if (currentRankKey === 'Capacitador' && cargoLower.includes('graduador')) forcePositive = true;
                              if (currentRankKey === 'Graduador' && cargoLower.includes('estagiário')) forcePositive = true;
                          } else {
-                             continue; // Remove da postagem se for superior e expirou prazo
+                             continue; 
                          }
                      }
                  }
@@ -1459,21 +1417,12 @@
                      }
                  }
  
-                 // --- NEW FILTERING LOGIC (GLOBAL LIST) ---
-                 // If Negative ([B]):
-                 // 1. Remove if NOT in Members List (membersCache) (Anti-Ghost)
-                 // 2. Remove if NOT in Gratification List (globalGratificationSet) IF list provided
                  if (statusObj.code === 'B') {
                      const inMembers = !!membersCache[nick.toLowerCase()];
                      const inGratList = globalGratificationSet.has(nick.toLowerCase());
- 
-                     // "conferir se o nickname negativo consta em B:B ... se não constar e for negativo, não deve aparecer"
                      if (!inMembers) continue; 
- 
-                     // "só irá remover os nicknames que não constarem e estiverem negativos" (based on gratification list)
                      if (hasGratFilter && !inGratList) continue;
                  }
-                 // ---------------------------
  
                  const avatarUrl = `https://www.habbo.com.br/habbo-imaging/avatarimage?user=${nick}&headonly=1&size=m`;
                  processedRows.push({ nick, classValues, total: totalPoints, statusObj, rawStatus, avatarUrl, isSuperior, justification, hasDonation, promotionLabel });
@@ -1486,9 +1435,9 @@
              console.error(error);
              els.tableBody.innerHTML = `<tr><td colspan="15" class="text-center p-8 text-red-400 font-bold">Erro ao ler dados: ${error.message}</td></tr>`;
          }
-     }
+    }
  
-     function renderTable(rows) {
+    function renderTable(rows) {
          let html = '';
          const statusOptions = [
              {val: '[A]', label: 'Positivo'}, {val: '[B]', label: 'Negativo'},
@@ -1532,10 +1481,10 @@
                                  </select></div><input type="text" id="justify-${index}" class="input-justification ${justificationStyle}" value="${justifyValue}" placeholder="Justifique..." oninput="updateRowJustification(${index}, this.value)">${superiorLabel}</div></td></tr>`;
          });
          els.tableBody.innerHTML = html || '<tr><td colspan="15" class="text-center p-8 text-slate-400">Nenhum dado encontrado.</td></tr>';
-         if (html) els.toolbar.classList.remove('hidden');
-     }
+         if (html && els.toolbar) els.toolbar.classList.remove('hidden');
+    }
  
-     window.updateRowStatus = function(index, newVal) {
+    window.updateRowStatus = function(index, newVal) {
          if(currentRenderData[index]) {
              currentRenderData[index].userOverrideStatus = newVal;
              const inputEl = document.getElementById(`justify-${index}`);
@@ -1544,18 +1493,18 @@
                  else { inputEl.classList.remove('visible'); currentRenderData[index].justification = ''; }
              }
          }
-     }
-     window.updateRowJustification = function(index, text) { if(currentRenderData[index]) currentRenderData[index].justification = text; }
+    }
+    window.updateRowJustification = function(index, text) { if(currentRenderData[index]) currentRenderData[index].justification = text; }
  
-     function renderHeader(config) {
+    function renderHeader(config) {
          let headerHtml = `<tr><th class="pl-6 text-left rounded-tl-xl">Avatar</th><th style="text-align: left; padding-left: 0.5rem;">Nickname</th>`;
          config.headerLabels.forEach(label => { headerHtml += `<th class="text-center">${label}</th>`; });
          headerHtml += `<th class="text-center text-[#68a7b9]">Total</th><th>Situação</th><th style="width: 160px;" class="rounded-tr-xl">Ação / Modif.</th></tr>`;
          els.tableHead.innerHTML = headerHtml;
-     }
-     function parseCSV(t) { return t.split('\n').map(l => l.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)).filter(r => r.length > 1); }
+    }
+    function parseCSV(t) { return t.split('\n').map(l => l.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)).filter(r => r.length > 1); }
  
-     function generateBBCodeString(mode = "post") {
+    function generateBBCodeString(mode = "post") {
          if(!currentRenderData.length) return "";
          const config = RANK_CONFIG[currentRankKey];
          const titleMeta = currentSheetTitle || "TÍTULO";
@@ -1730,13 +1679,13 @@
          });
      }
  
-     async function postHighlights() {
+    async function postHighlights() {
          if(currentRankKey !== 'Professor') return;
          
          window.open('https://www.policiarcc.com/h5-', '_blank');
-     }
+    }
  
-     async function sendToSheet(metaTitle, cargo, situacao, nicks) {
+    async function sendToSheet(metaTitle, cargo, situacao, nicks) {
          if (!nicks || nicks.trim() === '') return;
          const payload = { sheet: "Metas", rows: [[metaTitle, cargo, situacao, nicks]] };
          try {
@@ -1746,7 +1695,7 @@
                  body: JSON.stringify(payload)
              });
          } catch (error) { console.error("Erro log sheet", error); }
-     }
+    }
  
     async function triggerPost() {
          if(!currentRenderData.length) return;
@@ -1797,7 +1746,7 @@
          document.getElementById('post-confirm-modal').classList.add('open');
      }
  
-     async function confirmPostAction() {
+    async function confirmPostAction() {
          const finalCargo = document.getElementById('post-input-cargo').value;
          const finalTitle = document.getElementById('post-input-title').value;
          const finalBBCode = document.getElementById('post-input-bbcode').value;
@@ -1843,9 +1792,9 @@
              btnConfirm.innerHTML = "Tentar Novamente";
              btnCancel.disabled = false;
          }
-     }
+    }
  
-     function submitForumPost(bbcodeMessage) {
+    function submitForumPost(bbcodeMessage) {
          if (!forumTokens) {
              // Try fetching tokens one last time before failing
              const config = RANK_CONFIG[currentRankKey];
@@ -1883,14 +1832,14 @@
          setTimeout(() => document.body.removeChild(form), 2000);
      }
  
-     let ministryData = {
+    let ministryData = {
          date: "",
          ministers: { positive: [], negative: [] },
          interns: { positive: [], negative: [] },
          unknown: { positive: [], negative: [] }
-     };
+    };
  
-     function parseMinistryData() {
+    function parseMinistryData() {
          const text = document.getElementById('min-input-text').value;
          const dateInput = document.getElementById('min-detected-date');
          
@@ -1956,9 +1905,9 @@
          });
  
          renderMinistryResults();
-     }
+    }
  
-     function renderMinistryResults() {
+    function renderMinistryResults() {
          const statusFilter = document.getElementById('min-status-filter').value;
          const resMinisters = document.getElementById('min-result-minister');
          const resInterns = document.getElementById('min-result-intern');
@@ -2002,9 +1951,9 @@
                  actionContainer.classList.add('hidden');
              }
          }
-     }
+    }
  
-     function openMinistryLink(type) { 
+    function openMinistryLink(type) { 
          const responsible = document.getElementById('min-responsible').value;
          const date = ministryData.date || document.getElementById('min-detected-date').value;
          const statusFilter = document.getElementById('min-status-filter').value;
@@ -2038,9 +1987,9 @@
          });
          
          window.open(`https://www.policiarcc.com/h17-postagem-de-medalhas-af?${params.toString()}`, '_blank');
-     }
+    }
  
-     async function sendMinistryPunishments() {
+    async function sendMinistryPunishments() {
          const responsible = document.getElementById('min-responsible').value;
          if(!responsible) { showToast("Preencha o Responsável.", "warning"); return; }
  
@@ -2077,9 +2026,9 @@
          } finally {
              btn.disabled = false; btn.innerHTML = '<i class="fas fa-gavel"></i> <span>Postar Punições</span>';
          }
-     }
+    }
  
-     function openMinistryPunishmentLink() {
+    function openMinistryPunishmentLink() {
          const allNegatives = [
              ...ministryData.ministers.negative, 
              ...ministryData.interns.negative
@@ -2099,9 +2048,9 @@
          params.set('comprovacoes_g1', 'https://www.policiarcc.com/t38367');
          
          window.open(`${baseUrl}?${params.toString()}`, '_blank');
-     }
+    }
  
-     async function openMinistryMP() {
+    async function openMinistryMP() {
          const allNegatives = [
              ...ministryData.ministers.negative, 
              ...ministryData.interns.negative
@@ -2116,40 +2065,20 @@
          if (!confirmed) return;
  
          const btn = document.getElementById('btn-min-mp');
-         btn.disabled = true;
+         if(btn) btn.disabled = true;
  
          for(let i=0; i < allNegatives.length; i++) {
              const nick = allNegatives[i];
-             btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> (${i+1}/${allNegatives.length})`;
-             
-             const memberInfo = membersCache[nick.toLowerCase()];
-             let roleLabel = "Membro do Ministério"; 
-             if (memberInfo) roleLabel = memberInfo.cargo;
-             
-             const tipoCarta = "FUNÇÕES NÃO REALIZADAS";
-             const infracao = `não realização das funções do cargo de [b]${roleLabel}[/b]`;
-             const medalhas = "15 Medalhas Efetivas Negativas";
-             const advertenciaTexto = " e uma Advertência Interna";
- 
-             const bbcode = `[font=Poppins][table style="border: none!important; border-radius: 15px; width: auto; margin: 0 auto; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);" bgcolor="#79a8c3"][tr style="border: none!important"][td style="border: none!important; padding: 7px"][table style="border: none!important; width: 100%; border-radius: 15px;" bgcolor="#25313a"][tr style="border: none!important"][td style="border: none!important; padding: 14px"][img]https://i.imgur.com/S1tKqgc.gif[/img]
- [table style="border: none!important; border-radius: 40px; width: 40%; margin: -2% auto; position: relative;" bgcolor="79a8c3"][tr style="border: none!important"][td style="border: none!important"][center][color=white][b][size=16]CARTA DE ${tipoCarta}[/size][/b][/color][/center]
- [/td][/tr][/table][table style="border: none!important; width: 100%; border-radius: 15px; line-height: 1.4em;" bgcolor="f8f8ff"][tr style="border: none!important"][td style="border: none!important"]
- Saudações, [color=#79a8c3][b]{USERNAME}[/b][/color]
- 
- [justify]Venho informar que você está sendo punido(a) por ${infracao} na [b][color=#79a8c3]Escola de Formação de Executivos[/color][/b]. A penalização aplicada será: [color=#79a8c3][b]${medalhas}${advertenciaTexto}[/b][/color].[/justify]
- 
- [/td][/tr][/table]
- [size=11][color=white]Desenvolvido por [b]Brendon[/b] | Todos os direitos reservados à [b]Escola de Formação de Executivos[/b].[/color][/size]
- [/td][/tr][/table][/td][/tr][/table][/font]`;
- 
-             // Simulação de envio - Para funcionar precisa da função sendPrivateMessage
-              try {
-                 // await sendPrivateMessage(nick, `[EFE] ${tipoCarta} - LEIA!`, bbcode);
-                 // await delay(5000); 
-              } catch(e) { console.error(e); }
+             if(btn) btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> (${i+1}/${allNegatives.length})`;
+             try {
+                 // Simulate delay
+                 await delay(500); 
+             } catch(e) { console.error(e); }
          }
  
-         btn.disabled = false;
-         btn.innerHTML = `<i class="fas fa-envelope"></i> Enviar MPs`;
-         showToast("MPs enviadas.", "success");
-     }
+         if(btn) {
+             btn.disabled = false;
+             btn.innerHTML = `<i class="fas fa-envelope"></i> Enviar MPs`;
+         }
+         showToast("MPs enviadas (Simulado).", "success");
+    }
